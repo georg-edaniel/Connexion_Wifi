@@ -1,34 +1,37 @@
 /*
-  Titre      : Configuration WiFi ESP32
+  Titre      : Configuration WiFi + Redirection vers Dashboard Django
   Auteur     : Philip Moumie
   Date       : 09/10/2025
-  Description: Ce programme permet à un utilisateur de configurer le WiFi de l'ESP32 via une page web.
-               Si aucun réseau n’est enregistré, l’ESP32 crée un point d’accès local pour afficher une
-               interface de configuration. Une fois le WiFi configuré, l’ESP32 se connecte automatiquement
-               à ce réseau à chaque démarrage.
-  Version    : 0.0.1
+  Description: Ce programme permet à l'ESP32 de se connecter à un réseau WiFi via une page web.
+               Toutes les instructions nécessaires sont affichées au client directement dans le navigateur.
+               Une fois connecté, l’ESP32 redirige vers la page Django "/clients/".
+  Version    : 0.0.2
 */
 
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
 
+Preferences prefs;
+WebServer server(80);
 
-#include <WiFi.h>            // Pour gérer le WiFi
-#include <WebServer.h>       // Pour créer un serveur web local
-#include <Preferences.h>     // Pour stocker SSID et mot de passe dans la mémoire flash
+// Adresse du Dashboard Django (à adapter selon ton serveur)
+String dashboardURL = "http://192.168.1.100/clients/";
 
-Preferences prefs;           // Objet pour accéder à la mémoire
-WebServer server(80);        // Serveur web sur le port 80
-
-// Fonction qui affiche la page de configuration WiFi
+// Page de configuration WiFi (mode AP)
 void handleRoot() {
-  int n = WiFi.scanNetworks();  // Scan des réseaux disponibles
-  String options = ""; 
+  int n = WiFi.scanNetworks();
+  String options = "";
 
   for (int i = 0; i < n; i++) {
-    options += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + "</option>"; 
+    options += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + "</option>";
   }
 
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Configuration WiFi</title></head><body>";
-  html += "<h2>Configuration WiFi</h2>";
+  html += "<h2>Bienvenue !</h2>";
+  html += "<p>Vous êtes connecté au réseau de configuration <b>Capteur_Config</b>.</p>";
+  html += "<p>Ouvrez cette page (http://192.168.4.1) pour configurer votre WiFi.</p>";
+  html += "<h3>Étape 1 : Choisissez votre réseau WiFi</h3>";
   html += "<form action='/save' method='POST'>";
   html += "<label>Réseau WiFi :</label><br><select name='ssid'>" + options + "</select><br><br>";
   html += "<label>Mot de passe :</label><br><input type='password' name='password'><br><br>";
@@ -39,44 +42,62 @@ void handleRoot() {
   server.send(200, "text/html", html);
 }
 
-// Fonction qui enregistre le SSID et mot de passe
+// Sauvegarde SSID + mot de passe
 void handleSave() {
   String ssid = server.arg("ssid");
   String password = server.arg("password");
 
-  prefs.begin("wifi", false);       // Ouverture en écriture
-  prefs.putString("ssid", ssid);    // Sauvegarde du SSID
-  prefs.putString("password", password); // Sauvegarde du mot de passe
-  prefs.end();                      // Fermeture
-
-  server.send(200, "text/html", "<h2>WiFi enregistré ! Redémarrage...</h2>");
-  delay(3000);
-  ESP.restart();                    // Redémarrage de l’ESP32
-}
-
-// Fonction qui efface les identifiants WiFi et redémarre
-void handleReset() {
   prefs.begin("wifi", false);
-  prefs.clear();                    // Supprime SSID + mot de passe
+  prefs.putString("ssid", ssid);
+  prefs.putString("password", password);
   prefs.end();
 
-  WiFi.disconnect(true);            // Déconnecte et efface les identifiants internes
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Connexion en cours</title></head><body>";
+  html += "<h2>WiFi enregistré ✅</h2>";
+  html += "<p>L’appareil va redémarrer et tenter de se connecter à <b>" + ssid + "</b>.</p>";
+  html += "<p>Veuillez patienter quelques secondes...</p>";
+  html += "</body></html>";
+
+  server.send(200, "text/html", html);
+  delay(3000);
+  ESP.restart();
+}
+
+// Réinitialisation WiFi
+void handleReset() {
+  prefs.begin("wifi", false);
+  prefs.clear();
+  prefs.end();
+
+  WiFi.disconnect(true);
   server.send(200, "text/html", "<h2>WiFi réinitialisé ! Redémarrage...</h2>");
   delay(3000);
   ESP.restart();
 }
 
-void setup() {
-  Serial.begin(115200);             // Pour afficher les infos dans le moniteur série
+// Page après connexion réussie
+void handleDashboard() {
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Connexion réussie</title></head><body>";
+  html += "<h2>Connexion réussie ✅</h2>";
+  html += "<p>L’ESP32 est connecté à votre réseau WiFi.</p>";
+  html += "<p>Adresse IP locale de l’appareil : <b>" + WiFi.localIP().toString() + "</b></p>";
+  html += "<p>Accédez à votre Dashboard :</p>";
+  html += "<a href='" + dashboardURL + "'><button>Ouvrir le Dashboard</button></a>";
+  html += "</body></html>";
 
-  // Lecture des identifiants enregistrés
-  prefs.begin("wifi", true);        
+  server.send(200, "text/html", html);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  prefs.begin("wifi", true);
   String ssid = prefs.getString("ssid", "");
   String password = prefs.getString("password", "");
   prefs.end();
 
   if (ssid != "") {
-    WiFi.begin(ssid.c_str(), password.c_str());  // Tentative de connexion
+    WiFi.begin(ssid.c_str(), password.c_str());
     Serial.print("Connexion à ");
     Serial.println(ssid);
 
@@ -88,10 +109,10 @@ void setup() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nConnecté ! IP : " + WiFi.localIP().toString());
+      Serial.println("\n✅ Connecté ! IP : " + WiFi.localIP().toString());
 
-      // Serveur web actif même en mode connecté
-      server.on("/", handleRoot);
+      server.on("/", handleDashboard);  // Page d’accueil = confirmation + bouton Dashboard
+      server.on("/config", handleRoot); // Accès manuel à la config
       server.on("/save", handleSave);
       server.on("/reset", handleReset);
       server.begin();
@@ -99,19 +120,18 @@ void setup() {
     }
   }
 
-  // Si pas de connexion, on lance le mode configuration
-  Serial.println("\nMode configuration WiFi"); // Démarre en mode point d’accès
-  WiFi.softAP("Capteur_Config");              // Crée un réseau local
-  IPAddress IP = WiFi.softAPIP(); // Récupère l’IP du point d’accès
-  Serial.println("Connectez-vous à : http://" + IP.toString()); // Affiche l’IP du point d’accès
+  // Mode configuration si pas de WiFi
+  Serial.println("\n⚙️ Mode configuration WiFi");
+  WiFi.softAP("Capteur_Config");
+  IPAddress IP = WiFi.softAPIP();
+  Serial.println("Connectez-vous à : http://" + IP.toString());
 
-  // Routes du serveur web
-  server.on("/", handleRoot); // Page de configuration
-  server.on("/save", handleSave); // Sauvegarde des identifiants
-  server.on("/reset", handleReset); // Réinitialisation WiFi
+  server.on("/", handleRoot);
+  server.on("/save", handleSave);
+  server.on("/reset", handleReset);
   server.begin();
 }
 
 void loop() {
-  server.handleClient();  // Gère les requêtes HTTP
+  server.handleClient();
 }
